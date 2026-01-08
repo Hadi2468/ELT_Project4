@@ -1,0 +1,9 @@
+api:
+  base_url: https://api.wistia.com/v1
+  per_page: 100
+  timeout: 50
+
+medias:
+  - gskhw4w4lm
+  - v08dlrgr7v
+
