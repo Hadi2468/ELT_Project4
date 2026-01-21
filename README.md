@@ -1,4 +1,4 @@
-# Project 4: Wistia Video Analytics????
+# Project 4: Wistia Video Analytics
 
 This project implements a production-ready data pipeline for analyzing video engagement from the **Wistia Stats API**. It ingests, transforms, aggregates, and visualizes data using **AWS Glue**, **S3**, **Python/PySpark**, and **Streamlit**, following a **Bronze–Silver–Gold architecture**.
 
