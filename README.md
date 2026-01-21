@@ -49,6 +49,11 @@ This project implements a production-ready data pipeline for analyzing video eng
 * Secure, scalable, and cost-efficient
 * Generates actionable marketing insights
 
+## 🧑🏻‍💻 Author
+**Hadi Hosseini**  
+Data Engineer | AI/ML Engineer | Biomedical Data Scientist  
+➡️ www.linkedin.com/in/hadi468
+
 ---
 
 ## Repository
