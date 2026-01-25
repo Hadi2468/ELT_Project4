@@ -10,7 +10,6 @@ import boto3
 import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-
 from awsglue.utils import getResolvedOptions
 
 # =====================================================
@@ -67,9 +66,15 @@ LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 # Secrets Manager
 # =====================================================
 def get_wistia_token():
-    response = secrets_client.get_secret_value(SecretId=SECRET_NAME)
-    secret = json.loads(response["SecretString"])
-    return secret["wistia_api_token"]
+    try:
+        logger.info("✅ Fetching Wistia API token")
+        response = secrets_client.get_secret_value(SecretId=SECRET_NAME)
+        secret = json.loads(response["SecretString"])
+        logger.info("✅ Wistia token retrieved")
+        return secret["wistia_api_token"]
+    except Exception:
+        logger.critical("❌ Failed to retrieve Wistia API token", exc_info=True)
+        raise
 
 WISTIA_API_TOKEN = get_wistia_token()
 
@@ -83,6 +88,7 @@ HEADERS = {
 def load_state():
     try:
         obj = s3.get_object(Bucket=BRONZE_BUCKET, Key=STATE_KEY)
+        logger.info("✅ Previous ingestion state loaded")
         return json.loads(obj["Body"].read())
     except s3.exceptions.NoSuchKey:
         logger.info("▶️ No previous state found. Initializing new state.")
@@ -93,14 +99,21 @@ def load_state():
                 "last_created_at": None
             }
         }
+    except Exception:
+        logger.error("❌ Failed to load ingestion state", exc_info=True)
+        raise
 
 def save_state(state):
-    s3.put_object(
-        Bucket=BRONZE_BUCKET,
-        Key=STATE_KEY,
-        Body=json.dumps(state, indent=2)
-    )
-    logger.info("✅ last_ingestion.json updated")
+    try:
+        s3.put_object(
+            Bucket=BRONZE_BUCKET,
+            Key=STATE_KEY,
+            Body=json.dumps(state, indent=2)
+        )
+        logger.info("✅ last_ingestion.json updated")
+    except Exception:
+        logger.error("❌ Failed to save ingestion state", exc_info=True)
+        raise
 
 def load_latest_visitor():
     try:
@@ -109,139 +122,160 @@ def load_latest_visitor():
     except s3.exceptions.NoSuchKey:
         logger.info("▶️ No latest_visitor.json found (first run)")
         return None
+    except Exception:
+        logger.error("❌ Failed to load latest visitor checkpoint", exc_info=True)
+        raise
 
 def save_latest_visitor(visitor_key):
-    payload = {
-        "latest_visitor_key": visitor_key,
-        "snapshot_ts": datetime.now(timezone.utc).isoformat()
-    }
+    try:
+        payload = {
+            "latest_visitor_key": visitor_key,
+            "snapshot_ts": datetime.now(timezone.utc).isoformat()
+        }
 
-    s3.put_object(
-        Bucket=BRONZE_BUCKET,
-        Key=LATEST_VISITOR_KEY,
-        Body=json.dumps(payload, indent=2)
-    )
+        s3.put_object(
+            Bucket=BRONZE_BUCKET,
+            Key=LATEST_VISITOR_KEY,
+            Body=json.dumps(payload, indent=2)
+        )
 
-    logger.info(f"✅ latest_visitor.json updated → {visitor_key}")
+        logger.info(f"✅ latest_visitor.json updated → {visitor_key}")
+    except Exception:
+        logger.error("❌ Failed to save latest visitor checkpoint", exc_info=True)
+        raise
 
 # =====================================================
 # HTTP Helper
 # =====================================================
 def wistia_get(endpoint, params=None):
-    url = f"{BASE_URL}{endpoint}"
-    response = requests.get(
-        url,
-        headers=HEADERS,
-        params=params,
-        timeout=30
-    )
-    response.raise_for_status()
-    return response.json()
+    try:
+        logger.info(f"🌐 Calling Wistia API → {endpoint}")
+        url = f"{BASE_URL}{endpoint}"
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            params=params,
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException:
+        logger.error(f"❌ API request failed: {endpoint}", exc_info=True)
+        raise
 
 # =====================================================
 # Media Stats Ingestion
 # =====================================================
 def ingest_media_stats(state):
     logger.info("▶️ Ingesting MEDIA stats")
-    run_ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
+    try:
+        run_ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
 
-    for media_id in MEDIAS:
-        data = wistia_get(f"/stats/medias/{media_id}.json")
-        last_snapshot = state["media"].get(media_id)
+        for media_id in MEDIAS:
+            data = wistia_get(f"/stats/medias/{media_id}.json")
+            last_snapshot = state["media"].get(media_id)
 
-        if last_snapshot != data:
-            key = f"{MEDIA_PREFIX}media_{media_id}_{run_ts}.json"
-            s3.put_object(
-                Bucket=BRONZE_BUCKET,
-                Key=key,
-                Body=json.dumps(data, indent=2)
-            )
-            state["media"][media_id] = data
-            logger.info(f"✅ Media snapshot saved: {key}")
-        else:
-            logger.info(f"🟢 Media {media_id} unchanged — skipped")
+            if last_snapshot != data:
+                key = f"{MEDIA_PREFIX}media_{media_id}_{run_ts}.json"
+                s3.put_object(
+                    Bucket=BRONZE_BUCKET,
+                    Key=key,
+                    Body=json.dumps(data, indent=2)
+                )
+                state["media"][media_id] = data
+                logger.info(f"✅ Media snapshot saved: {key}")
+            else:
+                logger.info(f"🟢 Media {media_id} unchanged — skipped")
+    except Exception:
+        logger.error("❌ Media stats ingestion failed", exc_info=True)
+        raise
 
 # =====================================================
 # Media Engagement Ingestion
 # =====================================================
 def ingest_media_engagement(state):
     logger.info("▶️ Ingesting MEDIA engagement")
-    run_ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
+    try:
+        run_ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
 
-    for media_id in MEDIAS:
-        data = wistia_get(f"/stats/medias/{media_id}/engagement")
-        last_snapshot = state["media_engagement"].get(media_id)
+        for media_id in MEDIAS:
+            data = wistia_get(f"/stats/medias/{media_id}/engagement")
+            last_snapshot = state["media_engagement"].get(media_id)
 
-        if last_snapshot != data:
-            key = f"{ENGAGEMENT_PREFIX}media_engagement_{media_id}_{run_ts}.json"
-            s3.put_object(
-                Bucket=BRONZE_BUCKET,
-                Key=key,
-                Body=json.dumps(data, indent=2)
-            )
-            state["media_engagement"][media_id] = data
-            logger.info(f"✅ Engagement snapshot saved: {key}")
-        else:
-            logger.info(f"🟢 Engagement {media_id} unchanged — skipped")
+            if last_snapshot != data:
+                key = f"{ENGAGEMENT_PREFIX}media_engagement_{media_id}_{run_ts}.json"
+                s3.put_object(
+                    Bucket=BRONZE_BUCKET,
+                    Key=key,
+                    Body=json.dumps(data, indent=2)
+                )
+                state["media_engagement"][media_id] = data
+                logger.info(f"✅ Engagement snapshot saved: {key}")
+            else:
+                logger.info(f"🟢 Engagement {media_id} unchanged — skipped")
+    except Exception:
+        logger.error("❌ Media engagement ingestion failed", exc_info=True)
+        raise
 
 # =====================================================
 # Visitors Ingestion (Incremental + Early Stop)
 # =====================================================
 def ingest_visitors(state):
-    logger.info("▶️ Ingesting VISITORS (early-stop incremental)")
+    logger.info("▶️ Ingesting VISITORS (incremental)")
+    try:
+        checkpoint = load_latest_visitor()
+        last_visitor_key = checkpoint["latest_visitor_key"] if checkpoint else None
 
-    checkpoint = load_latest_visitor()
-    last_visitor_key = checkpoint["latest_visitor_key"] if checkpoint else None
+        page = 1
+        new_visitors = []
+        stop_fetching = False
 
-    page = 1
-    new_visitors = []
-    stop_fetching = False
+        while True:
+            visitors = wistia_get(
+                "/stats/visitors",
+                params={"page": page, "per_page": PER_PAGE}
+            )
 
-    while True:
-        visitors = wistia_get(
-            "/stats/visitors",
-            params={"page": page, "per_page": PER_PAGE}
-        )
-
-        if not visitors:
-            break
-
-        for v in visitors:
-            if last_visitor_key and v["visitor_key"] == last_visitor_key:
-                logger.info(
-                    f"🛑 Found previously ingested visitor_key={last_visitor_key}. Stopping pagination."
-                )
-                stop_fetching = True
+            if not visitors:
                 break
 
-            new_visitors.append(v)
+            for v in visitors:
+                if last_visitor_key and v["visitor_key"] == last_visitor_key:
+                    logger.info(f"🛑 Found checkpoint visitor {last_visitor_key}")
+                    stop_fetching = True
+                    break
+                new_visitors.append(v)
 
-        if stop_fetching or len(visitors) < PER_PAGE:
-            break
+            if stop_fetching or len(visitors) < PER_PAGE:
+                break
 
-        logger.info(f"✔️ Visitors page {page} processed")
-        page += 1
-        time.sleep(0.2)
+            logger.info(f"✔️ Visitors page {page} processed")
+            page += 1
+            time.sleep(0.2)
 
-    if not new_visitors:
-        logger.info("🟢 No new visitors found")
-        return
+        if not new_visitors:
+            logger.info("🟢 No new visitors found")
+            return
 
-    ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
-    key = f"{VISITORS_PREFIX}visitors_{ts}_batch_{len(new_visitors)}.json"
+        ts = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
+        key = f"{VISITORS_PREFIX}visitors_{ts}_batch_{len(new_visitors)}.json"
 
-    s3.put_object(
-        Bucket=BRONZE_BUCKET,
-        Key=key,
-        Body=json.dumps(new_visitors, indent=2)
-    )
+        s3.put_object(
+            Bucket=BRONZE_BUCKET,
+            Key=key,
+            Body=json.dumps(new_visitors, indent=2)
+        )
 
-    logger.info(f"✅ {len(new_visitors)} new visitors saved → {key}")
+        logger.info(f"✅ {len(new_visitors)} new visitors saved → {key}")
 
-    save_latest_visitor(new_visitors[0]["visitor_key"])
+        save_latest_visitor(new_visitors[0]["visitor_key"])
+        state["visitors"]["last_created_at"] = max(
+            v["created_at"] for v in new_visitors
+        )
 
-    newest_created = max(v["created_at"] for v in new_visitors)
-    state["visitors"]["last_created_at"] = newest_created
+    except Exception:
+        logger.error("❌ Visitors ingestion failed", exc_info=True)
+        raise
 
 # =====================================================
 # Main
